@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         System Prompt Helper
 // @namespace    http://tampermonkey.net/
-// @version      2.3
+// @version      2.5
 // @description  在LLM对话中辅助填写系统提示词，支持多站点独立配置、按频率拼接、黑金UI风格
 // @author       LMaxRouterCN
 // @match        *://*/*
@@ -22,9 +22,9 @@
     const SITE_DEFAULTS = {
         systemPrompt: '',
         panelPos: { x: 100, y: 100 },
-        panelSize: { width: 520, height: 220 }, // 【改】320x180 → 520x220：容纳右侧160px历史区
-        prependFreq: 1,        // 【新增】拼接频率：0=关闭，1=每次发送都拼接，N=每N次发送拼接一次（取代旧 autoPrepend 布尔开关）
-        prependCountdown: 1    // 【新增】拼接倒计时：还剩几次发送触发下次拼接，发送时递减，归零即拼接并重置为 prependFreq
+        panelSize: { width: 520, height: 220 },
+        prependFreq: 1,
+        prependCountdown: 1
     };
 
     const DEFAULTS = {
@@ -54,8 +54,6 @@
     }
 
     function _migrateStore(store) {
-        // 【新增】拼接频率迁移：旧 autoPrepend(布尔) → prependFreq(数值)，true→1(每次)，false→0(关闭)
-        // 幂等设计：重复执行无副作用，可随每次加载安全运行
         const migrateFreq = (cfg) => {
             if (cfg.prependFreq === undefined) {
                 cfg.prependFreq = (cfg.autoPrepend === false) ? 0 : 1;
@@ -63,16 +61,13 @@
             if (cfg.prependCountdown === undefined || cfg.prependCountdown < 1) {
                 cfg.prependCountdown = cfg.prependFreq > 0 ? cfg.prependFreq : 1;
             }
-            delete cfg.autoPrepend; // 旧键已被 prependFreq 完全取代，清除避免残留
+            delete cfg.autoPrepend;
         };
-        // 【新增·本轮】面板尺寸迁移：浮窗加宽容纳历史区，存量过窄尺寸(<420x170放不下两栏)一次性扩到新默认
-        // 只迁 defaults 不迁 perSite：panelSize 是纯UI状态，站点级配置不该被写入垃圾默认值
         const migratePanel = (cfg) => {
             if (!cfg.panelSize || cfg.panelSize.width < 420 || cfg.panelSize.height < 170) {
                 cfg.panelSize = { width: 520, height: 220 };
             }
         };
-        // 兼容旧版本 v1 数据结构
         if (!store.defaults) {
             const newStore = {
                 whitelist: store.whitelist || DEFAULTS.whitelist,
@@ -83,14 +78,14 @@
             for (const key of Object.keys(SITE_DEFAULTS)) {
                 if (store[key] !== undefined) newStore.defaults[key] = store[key];
             }
-            if (store.autoPrepend !== undefined) newStore.defaults.prependFreq = store.autoPrepend ? 1 : 0; // v1 旧键偏好保留
+            if (store.autoPrepend !== undefined) newStore.defaults.prependFreq = store.autoPrepend ? 1 : 0;
             migrateFreq(newStore.defaults);
             migratePanel(newStore.defaults);
             return newStore;
         }
-        migrateFreq(store.defaults); // 【新增】v2 结构：默认配置迁移
+        migrateFreq(store.defaults);
         migratePanel(store.defaults);
-        if (store.perSite) Object.values(store.perSite).forEach(migrateFreq); // 【新增】v2 结构：各站点独立配置迁移
+        if (store.perSite) Object.values(store.perSite).forEach(migrateFreq);
         return store;
     }
 
@@ -119,7 +114,7 @@
         };
     }
 
-    let _editTarget = 'defaults'; // 当前配置面板编辑的目标：'defaults' 或 site_url
+    let _editTarget = 'defaults';
 
     function cfgSaveRuntime(partial) {
         const store = _loadStore();
@@ -133,7 +128,6 @@
             Object.assign(store.perSite[source], partial);
         }
         _saveStore(store);
-        // 触发悬浮窗UI刷新
         if (_floatPanel) _syncFloatPanelUI();
     }
 
@@ -145,7 +139,7 @@
     const ENABLE_MODE_KEY = 'sph_enable_mode';
     const PAGE_SESSION_KEY = '__SPH_PageEnabled__';
     let _sessionEnabled = false;
-    let _abortController = null; // 用于一键切断所有事件监听
+    let _abortController = null;
 
     function _getEnableState() {
         if (_sessionEnabled) return 'session';
@@ -195,7 +189,6 @@
     }
 
     function _stopAgent() {
-        // 切断所有DOM事件监听，防止内存泄漏和幽灵拦截
         if (_abortController) {
             _abortController.abort();
             _abortController = null;
@@ -235,7 +228,7 @@
         #sph-hist-empty { color: #737373; font-size: 10px; text-align: center; padding: 14px 6px; line-height: 1.7; }
         .sph-hist-item { height: 44px; flex-shrink: 0; background: #1a1a1a; border: 1px solid #2a2a2a; border-left: 2px solid #2a2a2a; padding: 4px 6px; cursor: pointer; position: relative; overflow: hidden; }
         .sph-hist-item:hover { border-color: #facc15; }
-        .sph-hist-item.pinned { border-left-color: #facc15; } /* 置顶标识：左侧金色竖条 */
+        .sph-hist-item.pinned { border-left-color: #facc15; }
         .sph-hist-name { font-size: 11px; color: #d4d4d4; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-right: 40px; }
         .sph-hist-meta { font-size: 9px; color: #737373; margin-top: 3px; }
         .sph-hist-btns { position: absolute; right: 3px; top: 3px; display: none; gap: 2px; background: #0a0a0a; border: 1px solid #2a2a2a; padding: 1px 2px; }
@@ -244,9 +237,19 @@
         .sph-hist-btn:hover { color: #facc15; }
         .sph-hist-btn.active { color: #facc15; }
         .sph-hist-btn.danger:hover { color: #ef4444; }
-        .sph-hist-sep { height: 0; border-top: 1px dashed #2a2a2a; margin: 1px 0; flex-shrink: 0; } /* 置顶区/时间区分隔线 */
+        .sph-hist-sep { height: 0; border-top: 1px dashed #2a2a2a; margin: 1px 0; flex-shrink: 0; }
         .sph-hist-edit-inp { width: 100%; background: #0a0a0a; border: 1px solid #facc15; color: #d4d4d4; font-size: 11px; padding: 1px 3px; outline: none; }
-        /* 【新增】拼接频率选择器（交互与视觉对齐 PokerAgent 记忆注入频率控件：头部行 + 可展开选项体） */
+        /* ===== 配置面板·预设文本库编辑区（新增）===== */
+        #sph-cfg-hist-list { max-height: 200px; overflow-y: auto; background: #1a1a1a; padding: 5px; margin-bottom: 8px; display: flex; flex-direction: column; gap: 4px; }
+        #sph-cfg-hist-list::-webkit-scrollbar { width: 4px; }
+        #sph-cfg-hist-list::-webkit-scrollbar-thumb { background: #2a2a2a; }
+        .sph-cfg-hist-empty { color: #737373; font-size: 12px; text-align: center; padding: 14px 6px; line-height: 1.7; }
+        #sph-cfg-hist-editor { display: flex; flex-direction: column; gap: 6px; }
+        #sph-cfg-hist-hint { font-size: 11px; color: #737373; }
+        #sph-cfg-hist-content { width: 100%; height: 130px; background: #1a1a1a; border: 1px solid #2a2a2a; color: #d4d4d4; padding: 7px 10px; font-family: 'SF Mono', Consolas, monospace; font-size: 12px; resize: vertical; outline: none; box-sizing: border-box; }
+        #sph-cfg-hist-content:focus { border-color: #facc15; }
+        .sph-hist-item.sel { border-color: #facc15; background: #232323; }
+        /* 拼接频率选择器 */
         #sph-freq { border-top: 1px solid #2a2a2a; }
         #sph-freq-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 5px 8px; cursor: pointer; user-select: none; }
         #sph-freq-head:hover { background: #1a1a1a; }
@@ -307,7 +310,6 @@
     function log(type, msg) {
         const c = cfgLoad();
         console.log(`[SPH-${type}] ${msg}`);
-        // 极简版暂不实现UI浮窗日志，仅控制台输出
     }
 
     /* ================================================================
@@ -320,10 +322,10 @@
     let _startPos = { x: 0, y: 0 };
     let _startPanelPos = { x: 0, y: 0 };
     let _startPanelSize = { width: 0, height: 0 };
-    let _pendingManualEdit = false;   // 【改】语义收窄：仅键盘编辑的待记录标志（粘贴不再置位，片段由paste链路自行记录）
-    let _pasteEchoValue = null;       // 【新增】粘贴回声抑制基准：粘贴后的首个input若值等于此预期值，判定为粘贴自身引发，不置手动编辑标志
-    const HISTORY_MAX = 100;          // 【新增】预设历史条目上限：超出淘汰最旧非置顶条目，防存储膨胀
-    const _genHistId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7); // 【新增】条目唯一ID
+    let _pendingManualEdit = false;
+    let _pasteEchoValue = null;
+    const HISTORY_MAX = 100;
+    const _genHistId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 
     function _createFloatPanel() {
         if (_floatPanel) return;
@@ -334,8 +336,6 @@
         _floatPanel.style.top = c.panelPos.y + 'px';
         _floatPanel.style.width = c.panelSize.width + 'px';
         _floatPanel.style.height = c.panelSize.height + 'px';
-        // 【改·本轮】结构三层化：head / main(左编辑栏 + 右历史栏) / resize-handle
-        // 原 body/freq/foot 竖排整体挪入左栏 #sph-float-left，右栏 #sph-hist 为预设文本历史区
         _floatPanel.innerHTML = `
             <div id="sph-float-head">
                 <b>🤖 系统提示词</b>
@@ -347,7 +347,7 @@
                         <textarea id="sph-prompt-area" placeholder="在此输入系统提示词..." spellcheck="false"></textarea>
                     </div>
                     <div id="sph-freq">
-                        <div id="sph-freq-head" title="拼接频率：每N次发送自动拼接一次系统提示词，0为关闭">
+                        <div id="sph-freq-head" title="拼接频率：仅1次=本页首次发送拼接后关闭(刷新重置)，每N次=每N次发送拼接一次，0为关闭">
                             <span id="sph-freq-label">🔁 拼接频率</span>
                             <span id="sph-freq-count" title="距离下次拼接还剩的发送次数"></span>
                             <span id="sph-freq-val"></span>
@@ -355,6 +355,7 @@
                         <div id="sph-freq-body">
                             <div id="sph-freq-opts">
                                 <span class="sph-freq-opt" data-freq="0">关闭</span>
+                                <span class="sph-freq-opt" data-freq="-1">仅1次</span>  <!-- 【新增】-1=仅本页首次发送拼接，刷新重置 -->
                                 <span class="sph-freq-opt" data-freq="1">每次</span>
                                 <span class="sph-freq-opt" data-freq="2">每2次</span>
                                 <span class="sph-freq-opt" data-freq="3">每3次</span>
@@ -381,7 +382,6 @@
         document.body.appendChild(_floatPanel);
         _promptArea = _floatPanel.querySelector('#sph-prompt-area');
         _syncFloatPanelUI();
-        /* ── 拼接频率控件（上轮逻辑原样保留）── */
         const freqHead = _floatPanel.querySelector('#sph-freq-head');
         const freqBody = _floatPanel.querySelector('#sph-freq-body');
         freqHead.onclick = () => {
@@ -392,41 +392,32 @@
         });
         _floatPanel.querySelector('#sph-freq-custom-ok').onclick = () => {
             const v = parseInt(_floatPanel.querySelector('#sph-freq-custom-inp').value);
-            if (v > 0) _applyPrependFreq(v); // 0/负数/非数字输入静默忽略
+            if (v > 0) _applyPrependFreq(v);
         };
-        /* ── 预设历史区（新增）── */
-        // 列表事件委托：条目动态增删，容器一次绑定终身有效
         _floatPanel.querySelector('#sph-hist-list').addEventListener('click', _onHistClick);
-        // 粘贴：立即记录粘贴片段本身（需求字面：每次复制进即记录）
         _promptArea.addEventListener('paste', (e) => {
             const raw = e.clipboardData ? e.clipboardData.getData('text') : '';
             if (!raw || !raw.trim()) return;
-            const t = raw.replace(/\r\n?/g, '\n'); // 【新增】换行规范化：textarea落盘值本就会把CRLF/CR归一为LF，历史记录同步归一，避免同内容因\r差异产生近似重复条目
+            const t = raw.replace(/\r\n?/g, '\n');
             _addHistory(t);
-            // 【新增】记录粘贴完成后的预期值（paste事件触发于默认插入动作之前，此时selectionStart/End与value仍为粘贴前状态），
-            // 供input事件做回声判定；select-all后粘贴时selection被整体替换，此算式同样成立
             const ss = _promptArea.selectionStart, se = _promptArea.selectionEnd;
             _pasteEchoValue = _promptArea.value.slice(0, ss) + t + _promptArea.value.slice(se);
         });
-        // 值变化：systemPrompt落账必须始终执行（拼接链路依赖实时值）；但"粘贴引发的input"不算手动编辑，
-        // 否则失焦时会把旧内容+新片段的拼接碎片再记一条（本次bug根源）
         _promptArea.addEventListener('input', () => {
             cfgSaveRuntime({ systemPrompt: _promptArea.value });
             if (_pasteEchoValue !== null) {
-                const isEcho = _promptArea.value === _pasteEchoValue; // 值比对而非一次性标志：粘贴后未再动过=回声；后续真实编辑值必然偏离预期
-                _pasteEchoValue = null;                               // 无论是否回声都消费掉，无标志残留
-                if (isEcho) { _pendingManualEdit = false; return; } // 【改】回声命中同时清除编辑标志：粘贴动作本身完成了内容替换，此前编辑(如全选删除)的待记录意图已被覆盖，失焦无需再记
+                const isEcho = _promptArea.value === _pasteEchoValue;
+                _pasteEchoValue = null;
+                if (isEcho) { _pendingManualEdit = false; return; }
             }
-            _pendingManualEdit = true; // 非粘贴引发的值变化：视为手动编辑，失焦时固化记录
+            _pendingManualEdit = true;
         });
-        // 失焦固化：内容非空才记录，随后清除标记
         _promptArea.addEventListener('blur', () => {
             if (!_pendingManualEdit) return;
             _pendingManualEdit = false;
             if (_promptArea.value.trim()) _addHistory(_promptArea.value);
         });
         _floatPanel.querySelector('#sph-float-close').onclick = () => hideFloatPanel();
-        // 拖拽逻辑（原样保留）
         const head = _floatPanel.querySelector('#sph-float-head');
         head.addEventListener('mousedown', (e) => {
             if (e.target.id === 'sph-float-close') return;
@@ -435,7 +426,6 @@
             _startPanelPos = { x: parseInt(_floatPanel.style.left) || 0, y: parseInt(_floatPanel.style.top) || 0 };
             e.preventDefault();
         });
-        // 缩放逻辑（原样保留）
         const resizeHandle = _floatPanel.querySelector('#sph-resize-handle');
         resizeHandle.addEventListener('mousedown', (e) => {
             _isResizing = true;
@@ -446,7 +436,7 @@
         });
         document.addEventListener('mousemove', _onMouseMove);
         document.addEventListener('mouseup', _onMouseUp);
-        _renderHistoryList(); // 【新增】首帧渲染历史列表
+        _renderHistoryList();
         log('INFO', '悬浮窗已创建');
     }
 
@@ -455,8 +445,8 @@
             _floatPanel.style.left = (_startPanelPos.x + e.clientX - _startPos.x) + 'px';
             _floatPanel.style.top = (_startPanelPos.y + e.clientY - _startPos.y) + 'px';
         } else if (_isResizing) {
-            _floatPanel.style.width = Math.max(400, _startPanelSize.width + e.clientX - _startPos.x) + 'px';   // 【改】200→400：容纳历史区160px+编辑区
-            _floatPanel.style.height = Math.max(150, _startPanelSize.height + e.clientY - _startPos.y) + 'px'; // 【改】100→150
+            _floatPanel.style.width = Math.max(400, _startPanelSize.width + e.clientX - _startPos.x) + 'px';
+            _floatPanel.style.height = Math.max(150, _startPanelSize.height + e.clientY - _startPos.y) + 'px';
         }
     }
 
@@ -471,24 +461,21 @@
         _isResizing = false;
     }
 
-    /* 【新增】拼接频率辅助函数 */
-    // 频率数值 → 显示文案：0=关闭，1=每次，N=每N次
     function _freqLabel(n) {
         const f = parseInt(n);
+        if (f === -1) return '仅1次'; // 【新增】仅1次模式的哨兵值
         if (!f || f <= 0) return '关闭';
         return f === 1 ? '每次' : `每${f}次`;
     }
 
-    // 应用新拼接频率：写入配置并重置倒计时为新周期（避免旧倒计时跨越新频率产生错位）
     function _applyPrependFreq(n) {
-        cfgSaveRuntime({ prependFreq: n, prependCountdown: n > 0 ? n : 1 });
-        // 内部触发 _syncFloatPanelUI → _updateFreqUI 完成刷新
+        if (n === -1) _onceModeUsed = false; // 【新增】显式选择仅1次=重新武装：否则"切走再切回"会停留在已用完态，反直觉
+        cfgSaveRuntime({ prependFreq: n, prependCountdown: n > 0 ? n : 1 }); // -1时countdown写1占位，该模式不消费此值
         const body = _floatPanel?.querySelector('#sph-freq-body');
-        if (body) body.style.display = 'none'; // 选择后收起选项面板，与 PokerAgent 记忆频率控件行为一致
+        if (body) body.style.display = 'none';
         log('INFO', `拼接频率切换为: ${_freqLabel(n)}`);
     }
 
-    // 刷新频率选择器显示：当前频率文案、剩余次数倒计时、选项高亮态
     function _updateFreqUI() {
         if (!_floatPanel) return;
         const c = cfgLoad();
@@ -497,10 +484,12 @@
         const countEl = _floatPanel.querySelector('#sph-freq-count');
         if (!valEl || !countEl) return;
         valEl.textContent = _freqLabel(freq);
-        if (freq >= 2) {
-            // 倒计时仅频率≥2时有意义（关闭/每次模式下不存在周期概念）
+        if (freq === -1) {
+            // 【新增】仅1次模式：倒计时槽位改显状态（武装中/已用完），发送后立即可见翻转
+            countEl.textContent = _onceModeUsed ? '已用完' : '待触发';
+        } else if (freq >= 2) {
             let countdown = parseInt(c.prependCountdown);
-            if (isNaN(countdown) || countdown < 1) countdown = freq; // 非法状态防御性回落满周期
+            if (isNaN(countdown) || countdown < 1) countdown = freq;
             countEl.textContent = `剩${countdown}次`;
         } else {
             countEl.textContent = '';
@@ -514,7 +503,7 @@
         if (!_promptArea) return;
         const c = cfgLoad();
         _promptArea.value = c.systemPrompt || '';
-        _updateFreqUI(); // 【改】原复选框同步(enabledCb.checked)删除，改为频率选择器同步
+        _updateFreqUI();
         _updateStatus();
     }
 
@@ -525,26 +514,28 @@
             status.textContent = statusText;
         } else {
             const freq = parseInt(cfgLoad().prependFreq) || 0;
-            status.textContent = freq > 0 ? '就绪' : '就绪（拼接已关闭）'; // 【改】判定依据 autoPrepend → prependFreq
+            if (freq === -1) {
+                // 【新增】仅1次模式的状态行：随用时翻转，2秒后由_prependSystemPrompt的延时还原自然接住
+                status.textContent = _onceModeUsed ? '就绪（仅1次已用完）' : '就绪（仅1次待触发）';
+            } else {
+                status.textContent = freq > 0 ? '就绪' : '就绪（拼接已关闭）';
+            }
         }
     }
 
     /* ================================================================
-     * 4.5 预设文本历史（新增）
+     * 4.5 预设文本历史
      * 存储结构：store.histories（顶层，全局共享，不随站点配置隔离）
      * 数组顺序 = 显示顺序：[置顶区(手动序), 非置顶区(时间倒序)]
      * 所有排序在数据变更时维护，渲染层零排序逻辑
      * ================================================================ */
-    /* 【新增·自行决断】HTML转义助手：补丁8的 _renderHistoryList 调用了 esc()，但原文件与补丁均未提供该函数，
-       缺失会导致首次渲染含条目时抛 ReferenceError。此处补最小实现（转义 & < > " '），
-       防止标题含特殊字符破坏DOM结构/注入。若主LLM另有同名版本，替换即可 */
     function esc(s) {
         return String(s).replace(/[&<>"']/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
     }
 
     function _loadHistories() {
         const store = _loadStore();
-        if (!Array.isArray(store.histories)) store.histories = []; // 惰性初始化
+        if (!Array.isArray(store.histories)) store.histories = [];
         return store.histories;
     }
 
@@ -554,20 +545,34 @@
         _saveStore(store);
     }
 
-    // 非置顶区起点索引（置顶区末尾之后）：新条目/回流条目的插入位置
     function _firstUnpinnedIndex(arr) {
         const i = arr.findIndex(h => !h.pinned);
         return i === -1 ? arr.length : i;
     }
 
-    // 时间显示：当天只显示时分，跨天补日期
     function _fmtTime(ts) {
         const d = new Date(ts), now = new Date();
         const hm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
         return d.toDateString() === now.toDateString() ? hm : `${d.getMonth() + 1}/${d.getDate()} ${hm}`;
     }
 
-    /* 记录一条预设文本：内容去重（trim后相等视为同一条，仅刷新时间戳）+ 容量淘汰 */
+    /* 【新增】容量淘汰（从 _addHistory 抽出公用）：从最旧端(数组尾)找非置顶删除，置顶条目豁免 */
+    function _evictHistories(arr) {
+        while (arr.length > HISTORY_MAX) {
+            let di = -1;
+            for (let i = arr.length - 1; i >= 0; i--) { if (!arr[i].pinned) { di = i; break; } }
+            if (di === -1) return;
+            arr.splice(di, 1);
+        }
+    }
+
+    /* 【新增】双侧渲染同步：悬浮窗列表 + 配置面板列表。各自内部有存在性守卫，任一未开则跳过。
+       所有历史数据变更的统一出口——存储同源，调用此函数即实现两侧UI一致 */
+    function _refreshHistories() {
+        _renderHistoryList();
+        _renderConfigHistory();
+    }
+
     function _addHistory(text) {
         const content = String(text);
         if (!content.trim()) return;
@@ -576,26 +581,17 @@
         const key = content.trim();
         const idx = arr.findIndex(h => h.content.trim() === key);
         if (idx !== -1) {
-            // 已存在：不新建，仅刷新时间戳。非置顶条目提升到非置顶区顶部（最近使用语义），置顶条目保持手动顺序不动
             const h = arr[idx];
             h.updatedAt = now;
             if (!h.pinned) { arr.splice(idx, 1); arr.splice(_firstUnpinnedIndex(arr), 0, h); }
         } else {
-            // 新条目：插入非置顶区顶部（时间近=上），置顶区顺序不受影响
             arr.splice(_firstUnpinnedIndex(arr), 0, { id: _genHistId(), title: '', content, pinned: false, createdAt: now, updatedAt: now });
         }
-        // 容量淘汰：从最旧端(数组尾)找非置顶删除，置顶条目豁免
-        while (arr.length > HISTORY_MAX) {
-            let di = -1;
-            for (let i = arr.length - 1; i >= 0; i--) { if (!arr[i].pinned) { di = i; break; } }
-            if (di === -1) break; // 全是置顶：放弃淘汰
-            arr.splice(di, 1);
-        }
+        _evictHistories(arr);
         _saveHistories(arr);
-        _renderHistoryList();
+        _refreshHistories();
     }
 
-    /* 渲染历史列表：直接按数组顺序输出（排序已在数据层维护） */
     function _renderHistoryList() {
         const list = _floatPanel?.querySelector('#sph-hist-list');
         if (!list) return;
@@ -608,10 +604,8 @@
         }
         let html = '';
         arr.forEach((h, i) => {
-            // 置顶区与时间区之间插一条虚线分隔
             if (i > 0 && arr[i - 1].pinned && !h.pinned) html += '<div class="sph-hist-sep"></div>';
-            const name = h.title || h.content; // 显示优先级：重命名标题 > 内容前缀（ellipsis截断即"前几个字符"效果）
-            // 操作按钮：置顶条目多出↑▼（手动排序），hover显示
+            const name = h.title || h.content;
             const btns = `<span class="sph-hist-btns">` +
                 (h.pinned ? `<button class="sph-hist-btn" data-act="up" title="上移">▲</button><button class="sph-hist-btn" data-act="down" title="下移">▼</button>` : '') +
                 `<button class="sph-hist-btn ${h.pinned ? 'active' : ''}" data-act="pin" title="${h.pinned ? '取消置顶' : '置顶'}">📌</button>` +
@@ -625,9 +619,8 @@
         list.innerHTML = html;
     }
 
-    /* 列表事件委托分发：按钮动作 vs 条目本体点击(载入) */
     function _onHistClick(e) {
-        if (e.target.classList.contains('sph-hist-edit-inp')) return; // 重命名输入框的点击不触发载入
+        if (e.target.classList.contains('sph-hist-edit-inp')) return;
         const item = e.target.closest('.sph-hist-item');
         if (!item) return;
         const id = item.dataset.id;
@@ -642,16 +635,15 @@
             else if (act === 'rename') _histStartRename(item, id);
             return;
         }
-        _histLoad(id); // 点击条目本体：载入到编辑区
+        _histLoad(id);
     }
 
-    /* 载入预设：整体替换编辑区内容并同步保存到 systemPrompt 配置（拼接链路立即生效） */
     function _histLoad(id) {
         const h = _loadHistories().find(x => x.id === id);
         if (!h || !_promptArea) return;
-        _promptArea.value = h.content;      // 程序化赋值不触发input事件，下一行手动落账
+        _promptArea.value = h.content;
         cfgSaveRuntime({ systemPrompt: h.content });
-        _pendingManualEdit = false;         // 载入不算手动编辑：失焦时不重复记录
+        _pendingManualEdit = false;
         _updateStatus('已载入预设');
         setTimeout(() => _updateStatus(), 2000);
         log('INFO', `已载入预设文本 (${h.content.length} 字符)`);
@@ -663,7 +655,7 @@
         if (i === -1) return;
         arr.splice(i, 1);
         _saveHistories(arr);
-        _renderHistoryList();
+        _refreshHistories();
         log('INFO', '已删除预设条目');
     }
 
@@ -674,28 +666,26 @@
         const h = arr[i];
         h.pinned = !h.pinned;
         arr.splice(i, 1);
-        if (h.pinned) arr.unshift(h);                    // 置顶：移到置顶区最上
-        else arr.splice(_firstUnpinnedIndex(arr), 0, h); // 取消：回到非置顶区最新位
+        if (h.pinned) arr.unshift(h);
+        else arr.splice(_firstUnpinnedIndex(arr), 0, h);
         _saveHistories(arr);
-        _renderHistoryList();
+        _refreshHistories();
     }
 
-    /* 置顶条目手动排序：仅允许在置顶区内相邻交换，防止移出/移入置顶区（置顶/取消走 _histTogglePin） */
     function _histMove(id, dir) {
         const arr = _loadHistories();
         const i = arr.findIndex(x => x.id === id);
         if (i === -1) return;
         const j = i + dir;
         if (j < 0 || j >= arr.length) return;
-        if (!arr[i].pinned || !arr[j].pinned) return; // 边界静默：到头或邻居非置顶
+        if (!arr[i].pinned || !arr[j].pinned) return;
         [arr[i], arr[j]] = [arr[j], arr[i]];
         _saveHistories(arr);
-        _renderHistoryList();
+        _refreshHistories();
     }
 
-    /* 内联重命名：✏后条目名称原位变输入框，Enter/失焦确认，Esc取消，清空=回到内容前缀显示 */
     function _histStartRename(item, id) {
-        if (item.querySelector('.sph-hist-edit-inp')) return; // 已在编辑态
+        if (item.querySelector('.sph-hist-edit-inp')) return;
         const h = _loadHistories().find(x => x.id === id);
         if (!h) return;
         const nameEl = item.querySelector('.sph-hist-name');
@@ -706,23 +696,22 @@
         nameEl.replaceWith(inp);
         inp.focus();
         inp.select();
-        let done = false; // 确认幂等锁：Enter/blur 双入口竞争保护
+        let done = false;
         const confirm = (save) => {
             if (done) return;
             done = true;
             if (save) {
                 const arr = _loadHistories();
                 const t = arr.find(x => x.id === id);
-                if (t) { t.title = inp.value.trim(); _saveHistories(arr); } // trim后为空=清除重命名
+                if (t) { t.title = inp.value.trim(); _saveHistories(arr); }
             }
-            _renderHistoryList();
+            _refreshHistories();
         };
         inp.addEventListener('keydown', (ev) => {
-            ev.stopPropagation(); // 防击键外泄
+            ev.stopPropagation();
             if (ev.key === 'Enter') confirm(true);
             else if (ev.key === 'Escape') confirm(false);
         });
-        // 失焦确认延迟到下一宏任务：让同行按钮的click先执行完（否则render重建DOM导致点击落空）
         inp.addEventListener('blur', () => setTimeout(() => confirm(true), 0));
         inp.addEventListener('click', (ev) => ev.stopPropagation());
     }
@@ -747,7 +736,9 @@
         _configPanel = document.createElement('div');
         _configPanel.id = 'sph-config';
         document.body.appendChild(_configPanel);
-        _configPanel.querySelector('#sph-config-close').onclick = hideConfigPanel;
+        // 【Bug修复】删除原末行 _configPanel.querySelector('#sph-config-close').onclick = hideConfigPanel;
+        // 创建时面板尚无innerHTML，querySelector必返null，赋值抛TypeError导致配置面板菜单首次点击失效
+        // （第二次点击因_configPanel已存在跳过创建才恢复）。关闭按钮绑定由_renderConfigPanel完成，此处冗余且有害
     }
 
     function _renderConfigPanel() {
@@ -787,6 +778,19 @@
                     </div>
                 </div>
                 <div class="sph-sec">
+                    <div class="sph-sec-title">预设文本库 <span id="sph-cfg-hist-count" style="font-weight:400"></span></div>
+                    <div id="sph-cfg-hist-list"></div>
+                    <div id="sph-cfg-hist-editor">
+                        <div id="sph-cfg-hist-hint">未选中条目 — 写好内容后点"存为新预设"，或点击上方列表选中条目</div>
+                        <input class="sph-inp" id="sph-cfg-hist-title" placeholder="标题（可选，留空则列表显示内容前缀）">
+                        <textarea id="sph-cfg-hist-content" placeholder="在此编辑预设文本内容..." spellcheck="false"></textarea>
+                        <div style="display:flex; gap:6px;">
+                            <button class="sph-btn sph-btn-g" id="sph-cfg-hist-new">➕ 存为新预设</button>
+                            <button class="sph-btn sph-btn-p" id="sph-cfg-hist-save">💾 保存修改</button>
+                        </div>
+                    </div>
+                </div>
+                <div class="sph-sec">
                     <div class="sph-sec-title">控制台</div>
                     <div class="sph-toggle">
                         <input type="checkbox" id="sph-debug-cb" ${store.debugMode ? 'checked' : ''}>
@@ -798,7 +802,6 @@
                 </div>
             </div>
         `;
-        // 绑定事件
         _configPanel.querySelector('#sph-config-close').onclick = hideConfigPanel;
         _configPanel.querySelector('#sph-cancel').onclick = hideConfigPanel;
         _configPanel.querySelector('#sph-edit-defaults').onclick = () => {
@@ -849,6 +852,12 @@
             log('INFO', `调试模式已${s.debugMode ? '启用' : '禁用'}`);
         };
         _renderWhitelist();
+        _configPanel.querySelector('#sph-cfg-hist-list').addEventListener('click', _onCfgHistClick);
+        _configPanel.querySelector('#sph-cfg-hist-save').onclick = _cfgHistSave;
+        _configPanel.querySelector('#sph-cfg-hist-new').onclick = _cfgHistSaveNew;
+        if (_cfgHistSelId && !_loadHistories().some(x => x.id === _cfgHistSelId)) _cfgHistSelId = null;
+        _cfgHistEditorFill(_cfgHistSelId ? _loadHistories().find(x => x.id === _cfgHistSelId) : null);
+        _renderConfigHistory();
     }
 
     function _renderWhitelist() {
@@ -866,6 +875,119 @@
         });
     }
 
+    /* ================================================================
+     * 5.5 配置面板·预设文本库编辑区（新增）
+     * 与悬浮窗历史区共享 store.histories 与全部数据操作函数；
+     * 双向同步 = 变更后统一走 _refreshHistories()（存储同源，天然一致）
+     * 编辑器内容以DOM为准：列表级重渲染绝不回填编辑器，防止未保存修改被覆盖
+     * ================================================================ */
+    let _cfgHistSelId = null;
+
+    function _renderConfigHistory() {
+        if (!_configPanel) return;
+        const list = _configPanel.querySelector('#sph-cfg-hist-list');
+        if (!list) return;
+        const arr = _loadHistories();
+        const cntEl = _configPanel.querySelector('#sph-cfg-hist-count');
+        if (cntEl) cntEl.textContent = arr.length ? `(${arr.length})` : '';
+        if (!arr.length) {
+            list.innerHTML = '<div class="sph-cfg-hist-empty">暂无预设<br>在下方编辑器写好内容后点"存为新预设"</div>';
+        } else {
+            let html = '';
+            arr.forEach((h, i) => {
+                if (i > 0 && arr[i - 1].pinned && !h.pinned) html += '<div class="sph-hist-sep"></div>';
+                const name = h.title || h.content;
+                const btns = `<span class="sph-hist-btns">` +
+                    (h.pinned ? `<button class="sph-hist-btn" data-act="up" title="上移">▲</button><button class="sph-hist-btn" data-act="down" title="下移">▼</button>` : '') +
+                    `<button class="sph-hist-btn ${h.pinned ? 'active' : ''}" data-act="pin" title="${h.pinned ? '取消置顶' : '置顶'}">📌</button>` +
+                    `<button class="sph-hist-btn danger" data-act="del" title="删除">✕</button></span>`;
+                html += `<div class="sph-hist-item ${h.pinned ? 'pinned' : ''} ${h.id === _cfgHistSelId ? 'sel' : ''}" data-id="${h.id}">` +
+                    `<div class="sph-hist-name">${esc(name)}</div>` +
+                    `<div class="sph-hist-meta">${h.content.length}字 · ${_fmtTime(h.updatedAt)}</div>` +
+                    btns + `</div>`;
+            });
+            list.innerHTML = html;
+        }
+        if (_cfgHistSelId && !arr.some(x => x.id === _cfgHistSelId)) {
+            _cfgHistSelId = null;
+            _cfgHistEditorFill(null);
+        }
+    }
+
+    function _cfgHistEditorFill(h) {
+        if (!_configPanel) return;
+        const titleInp = _configPanel.querySelector('#sph-cfg-hist-title');
+        const contentTa = _configPanel.querySelector('#sph-cfg-hist-content');
+        const hint = _configPanel.querySelector('#sph-cfg-hist-hint');
+        if (!titleInp || !contentTa || !hint) return;
+        titleInp.value = h ? (h.title || '') : '';
+        contentTa.value = h ? h.content : '';
+        hint.textContent = h
+            ? `正在编辑: ${h.title || (h.content.trim().slice(0, 24) || '(空)')}`
+            : '未选中条目 — 写好内容后点"存为新预设"，或点击上方列表选中条目';
+    }
+
+    function _onCfgHistClick(e) {
+        const item = e.target.closest('.sph-hist-item');
+        if (!item) return;
+        const id = item.dataset.id;
+        const btn = e.target.closest('.sph-hist-btn');
+        if (btn) {
+            e.stopPropagation();
+            const act = btn.dataset.act;
+            if (act === 'del') _histDelete(id);
+            else if (act === 'pin') _histTogglePin(id);
+            else if (act === 'up') _histMove(id, -1);
+            else if (act === 'down') _histMove(id, 1);
+            return;
+        }
+        _cfgHistSelId = id;
+        _cfgHistEditorFill(_loadHistories().find(x => x.id === id) || null);
+        _renderConfigHistory();
+    }
+
+    function _cfgHistSave() {
+        if (!_configPanel) return;
+        if (!_cfgHistSelId) { log('WARN', '未选中预设条目：请先点击列表条目，或改用"存为新预设"'); return; }
+        const arr = _loadHistories();
+        const h = arr.find(x => x.id === _cfgHistSelId);
+        if (!h) { _cfgHistSelId = null; _refreshHistories(); return; }
+        const titleInp = _configPanel.querySelector('#sph-cfg-hist-title');
+        const contentTa = _configPanel.querySelector('#sph-cfg-hist-content');
+        if (!titleInp || !contentTa) return;
+        const content = contentTa.value;
+        if (!content.trim()) { log('WARN', '预设内容为空：如需移除该条目请用列表的删除按钮'); return; }
+        const contentChanged = content !== h.content;
+        h.title = titleInp.value.trim();
+        h.content = content;
+        if (contentChanged) {
+            h.updatedAt = Date.now();
+            if (!h.pinned) { const i = arr.indexOf(h); arr.splice(i, 1); arr.splice(_firstUnpinnedIndex(arr), 0, h); }
+        }
+        _saveHistories(arr);
+        _refreshHistories();
+        log('OK', `预设已保存 (${content.length} 字符${contentChanged ? '，内容变更已提升至时间区顶部' : ''})`);
+    }
+
+    function _cfgHistSaveNew() {
+        if (!_configPanel) return;
+        const titleInp = _configPanel.querySelector('#sph-cfg-hist-title');
+        const contentTa = _configPanel.querySelector('#sph-cfg-hist-content');
+        if (!titleInp || !contentTa) return;
+        const content = contentTa.value;
+        if (!content.trim()) { log('WARN', '内容为空，无法保存为新预设'); return; }
+        const arr = _loadHistories();
+        const now = Date.now();
+        const entry = { id: _genHistId(), title: titleInp.value.trim(), content, pinned: false, createdAt: now, updatedAt: now };
+        arr.splice(_firstUnpinnedIndex(arr), 0, entry);
+        _evictHistories(arr);
+        _saveHistories(arr);
+        _cfgHistSelId = entry.id;
+        _cfgHistEditorFill(entry);
+        _refreshHistories();
+        log('OK', `已保存为新预设 (${content.length} 字符)`);
+    }
+
     function showConfigPanel() {
         if (!_configPanel) _createConfigPanel();
         _renderConfigPanel();
@@ -880,6 +1002,9 @@
      * 6. 输入拦截核心逻辑
      * ================================================================ */
     let _lastFocusedInput = null;
+    let _onceModeUsed = false; // 【新增】仅1次模式(-1)的已用标志：模块级变量，生命周期=页面生命周期。
+                               // 刻意不用sessionStorage(同tab刷新后存活,违背"刷新即重置")也不用GM存储(跨页持久,更违背)。
+                               // SPA路由切换不触发脚本重跑，once不重置——符合"新标签页/刷新"字面语义
 
     function _findInputElement() {
         const selectors = ['textarea', 'input[type="text"]', 'div[contenteditable="true"]'];
@@ -920,7 +1045,6 @@
 
     function _onClick(e) {
         if (!_lastFocusedInput) return;
-        // 【改】autoPrepend 前置守卫移除，统一收敛到 _onSendDetected 内判定
         const sendBtn = _findSendButton();
         if (sendBtn && sendBtn.contains(e.target)) {
             log('INFO', '检测到发送按钮点击');
@@ -929,32 +1053,37 @@
     }
 
     function _onKeydown(e) {
-        if (e.repeat) return; // 【新增】长按Enter的连续keydown只计一次发送（旧版靠includes内容去重兜底，计数模式下必须显式拦截）
-        // 【新增·自行决断】来自悬浮窗重命名输入框的按键不算聊天发送：本监听挂在 document 捕获阶段，
-        // 重命名输入框自己的 stopPropagation 拦不到这里；不挡的话，重命名按 Enter 确认会触发发送检测，
-        // 把系统提示词拼进标题输入框后再保存，造成标题数据污染（默认 prependFreq=1 且提示词非空时必现）
+        if (e.repeat) return;
         if (e.target && e.target.classList && e.target.classList.contains('sph-hist-edit-inp')) return;
-        if (!_lastFocusedInput) return; // 【改】同上
+        if (!_lastFocusedInput) return;
         if ((e.ctrlKey && e.key === 'Enter') || (e.key === 'Enter' && !e.shiftKey && _isInInputContext(e.target))) {
             log('INFO', '检测到发送快捷键');
             _onSendDetected();
         }
     }
 
-    /* 【新增】发送检测统一入口：频率判定 + 倒计时推进；实际拼接仍委托 _prependSystemPrompt */
     function _onSendDetected() {
         if (!_lastFocusedInput) return;
         const c = cfgLoad();
         const freq = parseInt(c.prependFreq) || 0;
-        if (freq <= 0) return; // 频率关闭：不进入周期
-        if (!c.systemPrompt || !c.systemPrompt.trim()) return; // 空提示词：无内容可拼，周期不启动（避免空转计数）
+        if (freq === -1) {
+            // 【新增】仅1次模式：本页面生命周期内只拼接第一次发送
+            if (_onceModeUsed) return;                                // 已用过：本次会话内等效关闭
+            if (!c.systemPrompt || !c.systemPrompt.trim()) return;    // 无内容可拼：不消耗唯一机会
+            _onceModeUsed = true;                                     // 先落账再拼接
+            _updateFreqUI();                                          // 立即刷新状态显示（该模式无配置变更，不走cfgSaveRuntime）
+            _prependSystemPrompt();
+            return;
+        }
+        if (freq <= 0) return; // 0=关闭（-1已在上方分支消化）
+        if (!c.systemPrompt || !c.systemPrompt.trim()) return;
         let countdown = parseInt(c.prependCountdown);
-        if (isNaN(countdown) || countdown < 1) countdown = freq; // 倒计时缺失/非法：回落满周期
-        countdown--; // 本次发送消耗一次额度
-        const willPrepend = countdown <= 0; // 本次发送是否触发拼接
-        if (willPrepend) countdown = freq; // 重置倒计时，开启下一周期
-        cfgSaveRuntime({ prependCountdown: countdown }); // 先落账并刷新倒计时显示（内部触发 _syncFloatPanelUI）
-        if (willPrepend) _prependSystemPrompt(); // 后执行拼接：保证"已拼接"状态提示不被随后的UI刷新覆盖
+        if (isNaN(countdown) || countdown < 1) countdown = freq;
+        countdown--;
+        const willPrepend = countdown <= 0;
+        if (willPrepend) countdown = freq;
+        cfgSaveRuntime({ prependCountdown: countdown });
+        if (willPrepend) _prependSystemPrompt();
     }
 
     function _isInInputContext(el) {
@@ -1000,10 +1129,9 @@
      * 7. 启动入口
      * ================================================================ */
     function _startAgent() {
-        if (_abortController) _abortController.abort(); // 防止重复启动
+        if (_abortController) _abortController.abort();
         _abortController = new AbortController();
         const signal = _abortController.signal;
-        // 使用 AbortSignal 优雅管理事件生命周期
         document.addEventListener('focus', _onFocus, { capture: true, signal });
         document.addEventListener('click', _onClick, { capture: true, signal });
         document.addEventListener('keydown', _onKeydown, { capture: true, signal });
@@ -1024,7 +1152,6 @@
             else showFloatPanel();
         });
         _registerEnableMenus();
-        // 根据初始状态决定是否启动
         if (_getEnableState() !== 'disabled') {
             _startAgent();
         }
